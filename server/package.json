@@ -1,0 +1,8 @@
+{
+  "name": "icbc-youth-wealth-agent",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node tests/coach.test.cjs"
+  }
+}

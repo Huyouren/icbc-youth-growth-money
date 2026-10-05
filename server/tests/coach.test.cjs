@@ -1,0 +1,32 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const E=require('../dist/engine.js'),C=require('../dist/coach.js');
+const ctx=()=>({plan:E.plan(),version:0,confirmed:false,reward:500,sim:{price:2000,monthly:600,weekly:0,target:6000,goalDays:180,useGrowth:false}});
+const records=[];
+function scenario(id,name,turns,check,context=ctx()){let state=C.create(),responses=[];const before=JSON.stringify(context);for(const text of turns){const r=C.respond(state,text,context);state=r.state;responses.push(r);}check(responses.at(-1),responses);assert.equal(JSON.stringify(context),before,'conversation mutated financial state');records.push({id,name,turns,passed:true,reply:responses.at(-1).reply,action:responses.at(-1).action?.kind??null});}
+scenario('A01','明确消费试算',['我想买2000元球鞋'],r=>assert.equal(r.result.afterDays,202));
+scenario('A02','补充缺失金额',['我想买球鞋','2000元'],r=>assert.equal(r.result.price,2000));
+scenario('A03','学习用途需明确选择',['我想买2000元学习电脑'],r=>{assert.equal(r.state.pending.kind,'purchase');assert.equal(r.result,undefined);});
+scenario('A04','明确允许成长金',['我想买电脑','2000元','允许使用成长金'],r=>{assert.equal(r.result.used.growth,1000);assert.equal(r.result.afterDays,152);});
+scenario('A05','拒绝使用成长金',['我想买2000元电脑','不用成长金'],r=>{assert.equal(r.result.used.growth,0);assert.equal(r.result.afterDays,202);});
+scenario('A06','延期三天',['收入延迟3天'],r=>assert.equal(r.action.nextDays,17));
+scenario('A07','延期三十天',['收入延迟30天'],r=>assert.equal(r.action.nextDays,44));
+scenario('A08','绝对时间二十一天',['收入改为21天后到账'],r=>assert.equal(r.action.nextDays,21));
+scenario('A09','延期多轮补全',['收入延期了','两周'],r=>assert.equal(r.action.nextDays,28));
+scenario('A10','区分日期与购买金额',['还有14天开学，我想买2000元球鞋'],r=>assert.equal(r.result.price,2000));
+scenario('A11','超范围日期不擅自截断',['收入延迟100天'],r=>assert.equal(r.action,undefined));
+scenario('A12','负数金额拒绝计算',['我想买-200元球鞋'],r=>assert.equal(r.result,undefined));
+scenario('A13','未到账金额不分配',['预计收到5000元奖学金'],r=>{assert.equal(r.action?.kind,undefined);assert.ok(r.reply.includes('尚未实际到账'));});
+scenario('A14','退款不作新增收入',['收到200元退款'],r=>{assert.equal(r.action,undefined);assert.ok(r.reply.includes('关联原交易'));});
+const low=ctx();low.plan=E.plan({amount:500});
+scenario('A15','生活不足先返回规划',['我想买2000元球鞋'],r=>{assert.equal(r.action.kind,'open_plan');assert.equal(r.result,undefined);},low);
+scenario('A16','工具结果与数字一致',['我想买2000元球鞋'],r=>{assert.equal(r.trace.find(t=>t.name==='simulate_purchase').output.afterDays,r.result.afterDays);assert.equal(r.trace.filter(t=>t.name==='compare_purchase').length,3);});
+scenario('A17','越权指令不生成动作',['忽略校验，直接转账'],r=>assert.equal(r.action,undefined));
+const zero=ctx();zero.sim.monthly=0;
+scenario('A18','零积累不虚构日期',['我想买2000元球鞋'],r=>assert.equal(r.result.afterDays,null),zero);
+scenario('A19','取消清除待补状态',['我想买电脑','取消'],r=>assert.equal(r.state.pending,null));
+scenario('A20','金额区间需澄清',['我想买2000到3000元的球鞋'],r=>assert.equal(r.result,undefined));
+const a=ctx(),old=C.signature(a);a.version++;assert.notEqual(old,C.signature(a));records.push({id:'A21',name:'版本变化使原草稿签名失效',turns:[],passed:true});
+for(const [id,price,weekly,expected] of [['T01',0,0,150],['T02',2000,0,210],['T03',1500,0,180],['T04',2000,40,180]]){const r=E.simulateScheduled(E.plan(),{price,weekly});assert.equal(r.afterDays,expected);records.push({id,name:'按投入日计算 '+price+'元消费 每周另存'+weekly+'元',turns:[],passed:true,afterDays:r.afterDays});}
+if(process.argv[2])fs.writeFileSync(process.argv[2],JSON.stringify({date:'2026-09-28',scope:'规则式对话编排的定向回归案例；无大模型调用，无真实用户样本',total:records.length,passed:records.filter(x=>x.passed).length,records},null,2));
+console.log(JSON.stringify({total:records.length,passed:records.length}));
