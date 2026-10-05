@@ -30,8 +30,34 @@ function addRuleResponse(text){
   renderTrace(message,response.trace);$('chat-log').scrollTop=$('chat-log').scrollHeight;
  }catch(error){addMessage('当前条件无法完成计算：'+error.message+'。请先核对到账规划和消费模拟中的输入。');}
 }
+function runChallenge(kind){
+ const target=$('challenge-result');
+ if(!target)return;
+ try{
+  let title='',body='';
+  if(kind==='shortfall'){
+   const p=E.plan({amount:500,nextDays:14,reward:0,growth:0});
+   const error=E.validate(p,p.allocations);
+   title='到账 ¥500：规则拒绝硬凑完整方案';
+   body=error+'；生活金实际缺口 '+fmt(p.essentialGap)+'，本次没有可分配的奖励、成长金或梦想金。';
+  }else if(kind==='delay'){
+   const onTime=E.plan({amount:5000,nextDays:14,reward:500,growth:1000});
+   const delayed=E.plan({amount:5000,nextDays:28,reward:500,growth:1000});
+   title='收入再晚 14 天：先增加生活覆盖';
+   body='下一笔收入从 14 天延至 28 天，必要生活金缺口由 '+fmt(onTime.livingGap)+' 增至 '+fmt(delayed.livingGap)+'，增加 '+fmt(delayed.livingGap-onTime.livingGap)+'；确认前只生成新草稿，不改变已确认用途。';
+  }else if(kind==='purchase'){
+   const s=E.simulate(currentPlan(),{...simInput(),price:2000});
+   title='模拟购买 ¥2,000：把目标代价算出来';
+   body=s.shortfall?'当前可用的奖励、成长和梦想资金仍差 '+fmt(s.shortfall)+'，系统返回“资金不足”，不动用生活金和应急金。':'消费后旅行金为 '+fmt(s.remaining)+'，按当前每月存入和每周节省预计 '+daysText(s.afterDays)+' 达成目标（比不消费 '+daysText(s.baseDays)+' 晚 '+Math.max(0,s.delay)+' 天）。';
+  }else throw new Error('未知压力测试场景');
+  target.innerHTML='<strong>'+esc(title)+'</strong><p>'+esc(body)+'</p>';
+ }catch(error){target.innerHTML='<strong>场景无法计算</strong><p>'+esc(error.message)+'</p>';}
+}
 async function ask(text){
  if(!text.trim())return;addMessage(text,true);modelHistory.push({role:'user',content:text});
+ if(location.hostname.endsWith('github.io')){
+  modelAvailable=false;setModelBadge('规则演示 · 静态发布',false);addRuleResponse(text);return;
+ }
  try{
   const response=await fetch('/api/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:text,history:modelHistory.slice(-8),context:coachContext()})});
   const data=await response.json().catch(()=>({}));if(!response.ok||!data.ok)throw new Error(data.error||'模型服务不可用');
@@ -40,7 +66,10 @@ async function ask(text){
   modelAvailable=false;setModelBadge('规则回退 · 模型未配置',false);const notice=addMessage('模型服务当前不可用，已切换到规则演示。'+(error.message==='Failed to fetch'?'':`（${error.message}）`),false,'系统提示');notice.classList.add('model-notice');addRuleResponse(text);
  }
 }
-async function detectModel(){try{const r=await fetch('/api/health');const d=await r.json();if(d.configured){modelAvailable=true;setModelBadge('模型已接入 · '+d.model,true);}else{modelAvailable=false;setModelBadge('规则回退 · 待配置密钥',false);}}catch{modelAvailable=false;setModelBadge('规则演示 · 启动服务后可接入',false);}}
+async function detectModel(){
+ if(location.hostname.endsWith('github.io')){modelAvailable=false;setModelBadge('规则演示 · 静态发布',false);return;}
+ try{const r=await fetch('/api/health');const d=await r.json();if(d.configured){modelAvailable=true;setModelBadge('模型已接入 · '+d.model,true);}else{modelAvailable=false;setModelBadge('规则回退 · 待配置密钥',false);}}catch{modelAvailable=false;setModelBadge('规则演示 · 启动服务后可接入',false);}
+}
 $('generate').onclick=()=>{if(generate())toast('建议已更新，等待你确认');};
 ['income-amount','next-days','reward-request','income-type'].forEach(id=>$(id).addEventListener('input',()=>{inputDirty=true;renderAllocStatus();}));
 $('income-type').onchange=()=>{if(!committed)$('income-amount').value={'奖学金':5000,'竞赛奖金':3000,'实习工资':4500,'兼职收入':1200,'节日红包':800}[$('income-type').value];inputDirty=true;renderAllocStatus();};
@@ -49,6 +78,7 @@ $('hero-action').onclick=()=>{renderPlan();navigate('plan');};$('delay-action').
 ['purchase','target','goal-days','monthly','weekly','use-growth'].forEach(id=>$(id).addEventListener('input',renderSim));
 $('save-decision').onclick=()=>{if(!simResult||simResult.shortfall)return;const s=simResult;logs.push({kind:'decision',title:'记录消费方案 '+fmt(s.price),body:`旅行目标预计 ${daysText(s.afterDays)}；每 30 天存入 ${fmt(s.monthly)}，每周额外节省 ${fmt(s.weekly)}。${s.useGrowth?'已选择可使用成长金。':''}仅记录模拟，未扣款。`});toast('已记录，资金用途余额保持不变');};
 $('chat-form').onsubmit=e=>{e.preventDefault();const text=$('chat-input').value;$('chat-input').value='';ask(text);};document.querySelectorAll('[data-question]').forEach(n=>n.onclick=()=>ask(n.dataset.question));
+document.querySelectorAll('[data-challenge]').forEach(n=>n.onclick=()=>runChallenge(n.dataset.challenge));
 $('undo').onclick=()=>{if(!history.length)return;committed=history.pop();draft=committed?structuredClone(committed):E.plan({amount:draft.amount,nextDays:draft.nextDays,reward:Number($('reward-request').value)});$('next-days').value=draft.nextDays;$('income-amount').value=draft.amount;$('income-type').value=incomeType;version=Math.max(0,version-1);logs.push({kind:'undo',title:'撤销最近一次规划',body:committed?'已恢复 V'+version+' 的用途标签。':'已回到尚未确认状态；收入未被重复计入。'});inputDirty=false;renderPlan();renderHome();renderReview();toast('已恢复上一版用途安排');};
 $('reset').onclick=()=>{draft=E.plan();committed=null;history=[];logs=[];version=0;incomeType='奖学金';inputDirty=false;Object.entries({'income-type':'奖学金','income-amount':5000,'next-days':14,'reward-request':500,'purchase':2000,'target':6000,'goal-days':180,'monthly':600,'weekly':0}).forEach(([id,v])=>$(id).value=v);$('use-growth').checked=false;$('input-error').textContent='';$('chat-log').innerHTML='';coachState=MoneyCoach.create();addMessage('已回到初始情景：奖学金到账 ¥5,000。重新安排用途，或试算一笔消费。');renderPlan();renderHome();renderSim();navigate('home');toast('已重置演示');};
 document.querySelectorAll('[data-view]').forEach(n=>n.onclick=()=>navigate(n.dataset.view));document.querySelectorAll('[data-goto]').forEach(n=>n.onclick=()=>navigate(n.dataset.goto));renderPlan();renderHome();renderSim();detectModel();
